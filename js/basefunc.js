@@ -175,6 +175,10 @@ class ExcelProcessor {
           // Создаем новый Excel файл
           const newWorkbook = XLSX.utils.book_new();
           const newWorksheet = XLSX.utils.json_to_sheet(processedData);
+
+          // Устанавливаем ширину столбцов
+          this.setColumnWidths(newWorksheet, processedData);
+
           XLSX.utils.book_append_sheet(newWorkbook, newWorksheet, "TDSheet");
 
           // Генерируем файл в формате .xlsx для совместимости
@@ -195,23 +199,57 @@ class ExcelProcessor {
   }
 
   findAvailableColumns(existingColumns, newColumns) {
+    // Просто возвращаем оригинальные имена - будем добавлять в конец
     const availableColumnNames = {};
 
     newColumns.forEach((newColumnName) => {
-      let columnName = newColumnName;
-      let counter = 1;
-
-      // Проверяем, не занято ли имя колонки
-      while (existingColumns.includes(columnName)) {
-        columnName = `${newColumnName}_${counter}`;
-        counter++;
-      }
-
-      availableColumnNames[newColumnName] = columnName;
-      existingColumns.push(columnName); // Добавляем в список занятых
+      availableColumnNames[newColumnName] = newColumnName;
     });
 
     return availableColumnNames;
+  }
+
+  setColumnWidths(worksheet, data) {
+    const cols = [];
+
+    if (data.length === 0) return;
+
+    const headers = Object.keys(data[0]);
+
+    headers.forEach((header, index) => {
+      let width = 15; // Минимальная ширина по умолчанию
+
+      // Особые случаи для определенных столбцов
+      if (
+        header.toLowerCase().includes("наименование") ||
+        header.toLowerCase().includes("название") ||
+        header.toLowerCase().includes("товар") ||
+        header.toLowerCase().includes("продукт")
+      ) {
+        width = 35; // Больше для наименований
+      } else if (header.includes("Дата") || header.includes("Срок")) {
+        width = 20; // Для дат
+      } else if (header.includes("месяц") || header.includes("Осталось")) {
+        width = 18; // Для расчетных полей
+      }
+
+      // Проверяем максимальную длину содержимого в столбце
+      const maxContentLength = Math.max(
+        header.length,
+        ...data.slice(0, 100).map((row) => {
+          // Проверяем первые 100 строк для производительности
+          const value = row[header];
+          return value ? String(value).length : 0;
+        })
+      );
+
+      // Устанавливаем ширину как максимум между минимальной и длиной содержимого
+      width = Math.max(width, Math.min(maxContentLength + 2, 50)); // +2 для отступов, максимум 50
+
+      cols.push({ width: width });
+    });
+
+    worksheet["!cols"] = cols;
   }
 
   processDataFrame(data) {
@@ -229,7 +267,7 @@ class ExcelProcessor {
       );
     }
 
-    // Находим доступные имена для новых колонок
+    // Находим доступные имена для новых колонок (просто оригинальные имена)
     const columnMapping = this.findAvailableColumns(
       [...availableColumns],
       [...this.newColumns]
