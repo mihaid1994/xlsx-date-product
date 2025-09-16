@@ -502,8 +502,13 @@ class ExcelProcessor {
             return;
           }
 
-          // Обрабатываем данные
-          const processedData = this.processDataFrame(jsonData);
+          // Находим анализ для этого файла
+          const fileAnalysis = this.fileAnalysis.find(
+            (analysis) => analysis.fileName === file.name && !analysis.error
+          );
+
+          // Обрабатываем данные с учетом результатов анализа
+          const processedData = this.processDataFrame(jsonData, fileAnalysis);
 
           // Создаем новый Excel файл
           const newWorkbook = XLSX.utils.book_new();
@@ -585,7 +590,7 @@ class ExcelProcessor {
     worksheet["!cols"] = cols;
   }
 
-  processDataFrame(data) {
+  processDataFrame(data, fileAnalysis) {
     // Проверяем наличие обязательных колонок
     const firstRow = data[0];
     const availableColumns = Object.keys(firstRow);
@@ -600,11 +605,27 @@ class ExcelProcessor {
       );
     }
 
-    // Находим доступные имена для новых колонок (просто оригинальные имена)
-    const columnMapping = this.findAvailableColumns(
-      [...availableColumns],
-      [...this.newColumns]
-    );
+    // Используем результаты анализа вместо собственных вычислений
+    let newColumnNames = [...this.newColumns];
+
+    if (fileAnalysis && fileAnalysis.newColumnsWillBe) {
+      // Если есть результаты анализа, используем их для определения имен новых столбцов
+      // (на случай если понадобится переименование при конфликтах)
+      console.log(
+        `Используем результаты анализа для файла: ${fileAnalysis.fileName}`
+      );
+      console.log(
+        `Новые столбцы будут добавлены на позиции: ${fileAnalysis.newColumnsWillBe
+          .map((c) => c.position)
+          .join(", ")}`
+      );
+    }
+
+    // Создаем маппинг названий колонок
+    const columnMapping = {};
+    newColumnNames.forEach((name) => {
+      columnMapping[name] = name; // Используем оригинальные имена
+    });
 
     // Обрабатываем каждую строку
     const processedData = data.map((row) => {
@@ -632,6 +653,20 @@ class ExcelProcessor {
 
       return newRow;
     });
+
+    // Логируем для отладки
+    if (fileAnalysis) {
+      console.log(
+        `Обработка завершена. Добавлены столбцы: "${Object.values(
+          columnMapping
+        ).join('", "')}"`
+      );
+      console.log(
+        `Ожидаемые позиции в Excel: ${fileAnalysis.newColumnsWillBe
+          .map((c) => c.position)
+          .join(", ")}`
+      );
+    }
 
     return processedData;
   }
