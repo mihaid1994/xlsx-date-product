@@ -128,7 +128,7 @@ class ExcelProcessor {
 
         const processedData = await this.processFile(file);
         this.processedFiles.push({
-          name: `processed_${file.name}`,
+          name: `processed_${file.name.replace(/\.(xls|xlsx)$/i, ".xlsx")}`,
           originalName: file.name,
           data: processedData,
         });
@@ -177,7 +177,7 @@ class ExcelProcessor {
           const newWorksheet = XLSX.utils.json_to_sheet(processedData);
           XLSX.utils.book_append_sheet(newWorkbook, newWorksheet, "TDSheet");
 
-          // Генерируем файл
+          // Генерируем файл в формате .xlsx для совместимости
           const excelBuffer = XLSX.write(newWorkbook, {
             bookType: "xlsx",
             type: "array",
@@ -192,6 +192,26 @@ class ExcelProcessor {
       reader.onerror = () => reject(new Error("Ошибка чтения файла"));
       reader.readAsArrayBuffer(file);
     });
+  }
+
+  findAvailableColumns(existingColumns, newColumns) {
+    const availableColumnNames = {};
+
+    newColumns.forEach((newColumnName) => {
+      let columnName = newColumnName;
+      let counter = 1;
+
+      // Проверяем, не занято ли имя колонки
+      while (existingColumns.includes(columnName)) {
+        columnName = `${newColumnName}_${counter}`;
+        counter++;
+      }
+
+      availableColumnNames[newColumnName] = columnName;
+      existingColumns.push(columnName); // Добавляем в список занятых
+    });
+
+    return availableColumnNames;
   }
 
   processDataFrame(data) {
@@ -209,6 +229,12 @@ class ExcelProcessor {
       );
     }
 
+    // Находим доступные имена для новых колонок
+    const columnMapping = this.findAvailableColumns(
+      [...availableColumns],
+      [...this.newColumns]
+    );
+
     // Обрабатываем каждую строку
     const processedData = data.map((row) => {
       const newRow = { ...row };
@@ -218,14 +244,17 @@ class ExcelProcessor {
       const expiryDate = this.parseDate(row["Срок годности"]);
 
       // Рассчитываем общий срок годности в месяцах
-      newRow["Срок годности в месяцах общий"] = this.calculateMonthsDifference(
+      const totalMonthsColumnName =
+        columnMapping["Срок годности в месяцах общий"];
+      newRow[totalMonthsColumnName] = this.calculateMonthsDifference(
         manufactureDate,
         expiryDate
       );
 
       // Рассчитываем оставшиеся месяцы
       const currentDate = new Date();
-      newRow["Осталось месяцев"] = this.calculateMonthsDifference(
+      const remainingMonthsColumnName = columnMapping["Осталось месяцев"];
+      newRow[remainingMonthsColumnName] = this.calculateMonthsDifference(
         currentDate,
         expiryDate
       );
