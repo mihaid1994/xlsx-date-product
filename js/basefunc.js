@@ -223,18 +223,19 @@ class ExcelProcessor {
   findLastFilledColumn(data) {
     if (data.length === 0) return -1;
 
-    const allColumns = Object.keys(data[0]);
+    const firstRow = data[0]; // Первая строка с заголовками
+    const allColumns = Object.keys(firstRow);
     let lastFilledIndex = -1;
 
-    // Проверяем каждый столбец
+    // Проверяем только первую строку (заголовки) на наличие данных
     allColumns.forEach((column, index) => {
-      // Проверяем несколько первых строк на наличие данных
-      const hasData = data.slice(0, Math.min(10, data.length)).some((row) => {
-        const value = row[column];
-        return value !== null && value !== undefined && value !== "";
-      });
-
-      if (hasData) {
+      const headerValue = firstRow[column];
+      // Проверяем, что заголовок не пустой
+      if (
+        headerValue !== null &&
+        headerValue !== undefined &&
+        headerValue !== ""
+      ) {
         lastFilledIndex = index;
       }
     });
