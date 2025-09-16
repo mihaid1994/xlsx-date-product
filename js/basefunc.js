@@ -1,4 +1,4 @@
-// js/basefunc.js
+// js/basefunc.js - Улучшенная версия с надежным парсингом Excel
 class ExcelProcessor {
   constructor() {
     this.requiredColumns = ["Дата изготовления", "Срок годности"];
@@ -166,6 +166,7 @@ class ExcelProcessor {
     this.fileAnalysis = analysisResults;
   }
 
+  // УЛУЧШЕННЫЙ МЕТОД АНАЛИЗА ФАЙЛА
   async analyzeFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -176,42 +177,49 @@ class ExcelProcessor {
           const workbook = XLSX.read(data, { type: "array" });
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
-          const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
-          if (jsonData.length === 0) {
+          // НОВЫЙ ПОДХОД: Анализ структуры файла напрямую из worksheet
+          const structureInfo = this.analyzeWorksheetStructure(worksheet);
+
+          if (structureInfo.totalRows === 0) {
             reject(new Error("Файл пустой или не содержит данных"));
             return;
           }
 
-          // Находим крайний столбец и определяем следующую позицию для записи
-          const lastColumnIndex = this.findLastFilledColumn(
-            jsonData,
-            worksheet
+          // Получаем заголовки из первой строки
+          const headers = this.extractHeaders(
+            worksheet,
+            structureInfo.dataRange
           );
-          const nextColumnPosition = lastColumnIndex + 1;
-
-          // Простое получение заголовков из JSON (первая строка)
-          const firstRow = jsonData[0];
-          const existingColumns = Object.keys(firstRow);
 
           // Проверяем наличие обязательных колонок
           const missingColumns = this.requiredColumns.filter(
-            (col) => !existingColumns.includes(col)
+            (col) => !headers.includes(col)
+          );
+
+          // Определяем позиции для новых столбцов
+          const newColumnPositions = this.calculateNewColumnPositions(
+            structureInfo.lastColumn
           );
 
           resolve({
             fileName: file.name,
-            totalColumns: lastColumnIndex + 1,
-            existingColumns: existingColumns,
-            lastFilledColumn: `Столбец ${lastColumnIndex + 1}`,
-            nextColumnPosition: nextColumnPosition,
+            totalColumns: structureInfo.lastColumn + 1,
+            totalRows: structureInfo.totalRows - 1, // Исключаем заголовок
+            dataRange: structureInfo.dataRange,
+            existingColumns: headers,
+            lastFilledColumn: this.columnIndexToLetter(
+              structureInfo.lastColumn
+            ),
             newColumnsWillBe: this.newColumns.map((col, index) => ({
               name: col,
-              position: nextColumnPosition + index + 1,
+              letter: this.columnIndexToLetter(
+                newColumnPositions.startIndex + index
+              ),
+              position: newColumnPositions.startIndex + index + 1,
             })),
             missingRequiredColumns: missingColumns,
             isValid: missingColumns.length === 0,
-            totalRows: jsonData.length,
           });
         } catch (error) {
           reject(error);
@@ -223,15 +231,89 @@ class ExcelProcessor {
     });
   }
 
-  findLastFilledColumn(data, worksheet) {
-    if (!worksheet || !worksheet["!ref"]) return -1;
+  // НОВЫЙ МЕТОД: Анализ структуры worksheet напрямую
+  analyzeWorksheetStructure(worksheet) {
+    if (!worksheet || !worksheet["!ref"]) {
+      return { lastColumn: -1, totalRows: 0, dataRange: null };
+    }
 
-    // Получаем диапазон листа (например: A1:I115)
     const range = XLSX.utils.decode_range(worksheet["!ref"]);
 
-    // Просто возвращаем последний столбец из диапазона
-    // Если диапазон A1:I115, то последний столбец = 8 (индекс I)
-    return range.e.c;
+    // Найдем последний заполненный столбец более надежным способом
+    let lastFilledColumn = -1;
+    let totalDataRows = 0;
+
+    // Проходим по всем ячейкам для точного определения структуры
+    for (let row = range.s.r; row <= range.e.r; row++) {
+      let hasDataInRow = false;
+
+      for (let col = range.s.c; col <= range.e.c; col++) {
+        const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+        const cell = worksheet[cellAddress];
+
+        // Проверяем, есть ли данные в ячейке
+        if (cell && cell.v !== undefined && cell.v !== null && cell.v !== "") {
+          lastFilledColumn = Math.max(lastFilledColumn, col);
+          hasDataInRow = true;
+        }
+      }
+
+      if (hasDataInRow) {
+        totalDataRows++;
+      }
+    }
+
+    return {
+      lastColumn: lastFilledColumn,
+      totalRows: totalDataRows,
+      dataRange: range,
+      startRow: range.s.r,
+      startCol: range.s.c,
+      endRow: range.e.r,
+      endCol: range.e.c,
+    };
+  }
+
+  // НОВЫЙ МЕТОД: Извлечение заголовков напрямую из первой строки
+  extractHeaders(worksheet, range) {
+    if (!range) return [];
+
+    const headers = [];
+    const headerRow = range.s.r; // Первая строка
+
+    for (let col = range.s.c; col <= range.e.c; col++) {
+      const cellAddress = XLSX.utils.encode_cell({ r: headerRow, c: col });
+      const cell = worksheet[cellAddress];
+
+      if (cell && cell.v !== undefined && cell.v !== null && cell.v !== "") {
+        headers.push(String(cell.v).trim());
+      } else {
+        // Для пустых ячеек добавляем placeholder, чтобы сохранить позиции
+        headers.push(`Столбец_${col + 1}`);
+      }
+    }
+
+    return headers;
+  }
+
+  // УПРОЩЕННЫЙ МЕТОД: Расчет позиций новых столбцов
+  calculateNewColumnPositions(lastColumnIndex) {
+    return {
+      startIndex: lastColumnIndex + 1,
+      endIndex: lastColumnIndex + this.newColumns.length,
+    };
+  }
+
+  // ВСПОМОГАТЕЛЬНЫЙ МЕТОД: Конвертация индекса столбца в букву (A, B, C...)
+  columnIndexToLetter(index) {
+    if (index < 0) return "";
+
+    let letter = "";
+    while (index >= 0) {
+      letter = String.fromCharCode(65 + (index % 26)) + letter;
+      index = Math.floor(index / 26) - 1;
+    }
+    return letter;
   }
 
   isValidExcelFile(file) {
@@ -280,13 +362,21 @@ class ExcelProcessor {
                 <span>🎯 Последний заполненный столбец:</span> 
                 <strong>"${analysis.lastFilledColumn}"</strong>
               </div>
+              <div class="detail-row">
+                <span>📝 Диапазон данных:</span> 
+                <strong>${
+                  analysis.dataRange
+                    ? XLSX.utils.encode_range(analysis.dataRange)
+                    : "Не определен"
+                }</strong>
+              </div>
               <div class="detail-row new-columns-info">
                 <span>➕ Новые столбцы будут добавлены:</span>
                 <div class="new-columns-list">
                   ${analysis.newColumnsWillBe
                     .map(
                       (col) =>
-                        `<div class="new-column">• Столбец ${col.position}: "<strong>${col.name}</strong>"</div>`
+                        `<div class="new-column">• Столбец ${col.letter} (позиция ${col.position}): "<strong>${col.name}</strong>"</div>`
                     )
                     .join("")}
                 </div>
@@ -462,6 +552,7 @@ class ExcelProcessor {
     }, 1000);
   }
 
+  // УЛУЧШЕННЫЙ МЕТОД ОБРАБОТКИ ФАЙЛА
   async processFile(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -475,21 +566,29 @@ class ExcelProcessor {
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
 
-          // Преобразуем в JSON
-          const jsonData = XLSX.utils.sheet_to_json(worksheet);
+          // НОВЫЙ ПОДХОД: Используем улучшенную структуру
+          const structureInfo = this.analyzeWorksheetStructure(worksheet);
 
-          if (jsonData.length === 0) {
-            reject(new Error("Файл пустой или не содержит данных"));
+          if (structureInfo.totalRows <= 1) {
+            // <= 1 потому что первая строка - заголовки
+            reject(new Error("Файл пустой или содержит только заголовки"));
             return;
           }
 
-          // Находим анализ для этого файла
-          const fileAnalysis = this.fileAnalysis.find(
-            (analysis) => analysis.fileName === file.name && !analysis.error
-          );
+          // Конвертируем в JSON с настройками для корректного парсинга
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, {
+            raw: false, // Не использовать raw значения
+            dateNF: "dd.mm.yyyy", // Формат даты
+            defval: "", // Значение по умолчанию для пустых ячеек
+          });
 
-          // Обрабатываем данные с учетом результатов анализа
-          const processedData = this.processDataFrame(jsonData, fileAnalysis);
+          if (jsonData.length === 0) {
+            reject(new Error("Не удалось извлечь данные из файла"));
+            return;
+          }
+
+          // Обрабатываем данные
+          const processedData = this.processDataFrame(jsonData);
 
           // Создаем новый Excel файл
           const newWorkbook = XLSX.utils.book_new();
@@ -517,15 +616,45 @@ class ExcelProcessor {
     });
   }
 
-  findAvailableColumns(existingColumns, newColumns) {
-    // Просто возвращаем оригинальные имена - будем добавлять в конец
-    const availableColumnNames = {};
+  // УПРОЩЕННЫЙ МЕТОД ОБРАБОТКИ ДАННЫХ
+  processDataFrame(data) {
+    // Проверяем наличие обязательных колонок
+    const firstRow = data[0];
+    const availableColumns = Object.keys(firstRow);
 
-    newColumns.forEach((newColumnName) => {
-      availableColumnNames[newColumnName] = newColumnName;
+    const missingColumns = this.requiredColumns.filter(
+      (col) => !availableColumns.includes(col)
+    );
+
+    if (missingColumns.length > 0) {
+      throw new Error(
+        `Отсутствуют обязательные колонки: ${missingColumns.join(", ")}`
+      );
+    }
+
+    // Обрабатываем каждую строку - просто добавляем новые столбцы в конец
+    const processedData = data.map((row) => {
+      const newRow = { ...row };
+
+      // Парсим даты
+      const manufactureDate = this.parseDate(row["Дата изготовления"]);
+      const expiryDate = this.parseDate(row["Срок годности"]);
+
+      // Добавляем новые столбцы
+      newRow["Срок годности в месяцах общий"] = this.calculateMonthsDifference(
+        manufactureDate,
+        expiryDate
+      );
+
+      newRow["Осталось месяцев"] = this.calculateMonthsDifference(
+        new Date(),
+        expiryDate
+      );
+
+      return newRow;
     });
 
-    return availableColumnNames;
+    return processedData;
   }
 
   setColumnWidths(worksheet, data) {
@@ -571,46 +700,6 @@ class ExcelProcessor {
     worksheet["!cols"] = cols;
   }
 
-  processDataFrame(data, fileAnalysis) {
-    // Проверяем наличие обязательных колонок
-    const firstRow = data[0];
-    const availableColumns = Object.keys(firstRow);
-
-    const missingColumns = this.requiredColumns.filter(
-      (col) => !availableColumns.includes(col)
-    );
-
-    if (missingColumns.length > 0) {
-      throw new Error(
-        `Отсутствуют обязательные колонки: ${missingColumns.join(", ")}`
-      );
-    }
-
-    // Обрабатываем каждую строку - просто добавляем новые столбцы в конец
-    const processedData = data.map((row) => {
-      const newRow = { ...row };
-
-      // Парсим даты
-      const manufactureDate = this.parseDate(row["Дата изготовления"]);
-      const expiryDate = this.parseDate(row["Срок годности"]);
-
-      // Добавляем новые столбцы
-      newRow["Срок годности в месяцах общий"] = this.calculateMonthsDifference(
-        manufactureDate,
-        expiryDate
-      );
-
-      newRow["Осталось месяцев"] = this.calculateMonthsDifference(
-        new Date(),
-        expiryDate
-      );
-
-      return newRow;
-    });
-
-    return processedData;
-  }
-
   parseDate(dateStr) {
     if (!dateStr || dateStr === "" || dateStr == null) {
       return null;
@@ -631,7 +720,7 @@ class ExcelProcessor {
           const parts = dateStr.split(".");
           if (parts.length === 3) {
             const day = parseInt(parts[0]);
-            const month = parseInt(parts[1]) - 1; // месяцы в JS начинаются с 0
+            const month = parseInt(parts[1]) - 1; // месяцы в JS начинают с 0
             const year = parseInt(parts[2]);
             return new Date(year, month, day);
           }
@@ -811,7 +900,6 @@ class ExcelProcessor {
 
   showError(message) {
     console.error(message);
-    // Можно добавить toast уведомления
     alert(message);
   }
 }
@@ -834,5 +922,5 @@ document.addEventListener("DOMContentLoaded", function () {
     return;
   }
 
-  console.log("Excel Processor инициализирован");
+  console.log("Excel Processor инициализирован с улучшенным парсингом");
 });
