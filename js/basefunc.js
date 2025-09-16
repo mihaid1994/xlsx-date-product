@@ -183,24 +183,35 @@ class ExcelProcessor {
             return;
           }
 
-          const firstRow = jsonData[0];
-          const existingColumns = Object.keys(firstRow);
-
-          // Находим последний заполненный столбец
-          const lastFilledColumnIndex = this.findLastFilledColumn(jsonData);
+          // Находим последний заполненный столбец напрямую через анализ ячеек
+          const lastFilledColumnIndex = this.findLastFilledColumn(
+            jsonData,
+            worksheet
+          );
           const nextColumnPosition = lastFilledColumnIndex + 1;
+
+          // Получаем реальные заголовки из первой строки Excel
+          const realHeaders = [];
+          if (worksheet["!ref"]) {
+            const range = XLSX.utils.decode_range(worksheet["!ref"]);
+            for (let col = 0; col <= range.e.c; col++) {
+              const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
+              const cell = worksheet[cellAddress];
+              realHeaders.push(cell ? cell.v || "" : "");
+            }
+          }
 
           // Проверяем наличие обязательных колонок
           const missingColumns = this.requiredColumns.filter(
-            (col) => !existingColumns.includes(col)
+            (col) => !realHeaders.includes(col)
           );
 
           resolve({
             fileName: file.name,
-            totalColumns: existingColumns.length,
-            existingColumns: existingColumns,
+            totalColumns: realHeaders.length,
+            existingColumns: realHeaders,
             lastFilledColumn:
-              existingColumns[lastFilledColumnIndex] || "Не определено",
+              realHeaders[lastFilledColumnIndex] || "Не определено",
             nextColumnPosition: nextColumnPosition,
             newColumnsWillBe: this.newColumns.map((col, index) => ({
               name: col,
@@ -220,25 +231,24 @@ class ExcelProcessor {
     });
   }
 
-  findLastFilledColumn(data) {
-    if (data.length === 0) return -1;
+  findLastFilledColumn(data, worksheet) {
+    if (!worksheet || !worksheet["!ref"]) return -1;
 
-    const firstRow = data[0]; // Первая строка с заголовками
-    const allColumns = Object.keys(firstRow);
+    // Получаем диапазон листа (например: A1:I115)
+    const range = XLSX.utils.decode_range(worksheet["!ref"]);
+    const lastCol = range.e.c; // Последний столбец (индекс с 0)
+
+    // Проверяем первую строку напрямую через ячейки
     let lastFilledIndex = -1;
 
-    // Проверяем только первую строку (заголовки) на наличие данных
-    allColumns.forEach((column, index) => {
-      const headerValue = firstRow[column];
-      // Проверяем, что заголовок не пустой
-      if (
-        headerValue !== null &&
-        headerValue !== undefined &&
-        headerValue !== ""
-      ) {
-        lastFilledIndex = index;
+    for (let col = 0; col <= lastCol; col++) {
+      const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col }); // A1, B1, C1...
+      const cell = worksheet[cellAddress];
+
+      if (cell && cell.v !== null && cell.v !== undefined && cell.v !== "") {
+        lastFilledIndex = col;
       }
-    });
+    }
 
     return lastFilledIndex;
   }
