@@ -183,35 +183,27 @@ class ExcelProcessor {
             return;
           }
 
-          // Находим последний заполненный столбец напрямую через анализ ячеек
-          const lastFilledColumnIndex = this.findLastFilledColumn(
+          // Находим крайний столбец и определяем следующую позицию для записи
+          const lastColumnIndex = this.findLastFilledColumn(
             jsonData,
             worksheet
           );
-          const nextColumnPosition = lastFilledColumnIndex + 1;
+          const nextColumnPosition = lastColumnIndex + 1;
 
-          // Получаем реальные заголовки из первой строки Excel
-          const realHeaders = [];
-          if (worksheet["!ref"]) {
-            const range = XLSX.utils.decode_range(worksheet["!ref"]);
-            for (let col = 0; col <= range.e.c; col++) {
-              const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col });
-              const cell = worksheet[cellAddress];
-              realHeaders.push(cell ? cell.v || "" : "");
-            }
-          }
+          // Простое получение заголовков из JSON (первая строка)
+          const firstRow = jsonData[0];
+          const existingColumns = Object.keys(firstRow);
 
           // Проверяем наличие обязательных колонок
           const missingColumns = this.requiredColumns.filter(
-            (col) => !realHeaders.includes(col)
+            (col) => !existingColumns.includes(col)
           );
 
           resolve({
             fileName: file.name,
-            totalColumns: realHeaders.length,
-            existingColumns: realHeaders,
-            lastFilledColumn:
-              realHeaders[lastFilledColumnIndex] || "Не определено",
+            totalColumns: lastColumnIndex + 1,
+            existingColumns: existingColumns,
+            lastFilledColumn: `Столбец ${lastColumnIndex + 1}`,
             nextColumnPosition: nextColumnPosition,
             newColumnsWillBe: this.newColumns.map((col, index) => ({
               name: col,
@@ -236,21 +228,10 @@ class ExcelProcessor {
 
     // Получаем диапазон листа (например: A1:I115)
     const range = XLSX.utils.decode_range(worksheet["!ref"]);
-    const lastCol = range.e.c; // Последний столбец (индекс с 0)
 
-    // Проверяем первую строку напрямую через ячейки
-    let lastFilledIndex = -1;
-
-    for (let col = 0; col <= lastCol; col++) {
-      const cellAddress = XLSX.utils.encode_cell({ r: 0, c: col }); // A1, B1, C1...
-      const cell = worksheet[cellAddress];
-
-      if (cell && cell.v !== null && cell.v !== undefined && cell.v !== "") {
-        lastFilledIndex = col;
-      }
-    }
-
-    return lastFilledIndex;
+    // Просто возвращаем последний столбец из диапазона
+    // Если диапазон A1:I115, то последний столбец = 8 (индекс I)
+    return range.e.c;
   }
 
   isValidExcelFile(file) {
@@ -605,29 +586,7 @@ class ExcelProcessor {
       );
     }
 
-    // Используем результаты анализа вместо собственных вычислений
-    let newColumnNames = [...this.newColumns];
-
-    if (fileAnalysis && fileAnalysis.newColumnsWillBe) {
-      // Если есть результаты анализа, используем их для определения имен новых столбцов
-      // (на случай если понадобится переименование при конфликтах)
-      console.log(
-        `Используем результаты анализа для файла: ${fileAnalysis.fileName}`
-      );
-      console.log(
-        `Новые столбцы будут добавлены на позиции: ${fileAnalysis.newColumnsWillBe
-          .map((c) => c.position)
-          .join(", ")}`
-      );
-    }
-
-    // Создаем маппинг названий колонок
-    const columnMapping = {};
-    newColumnNames.forEach((name) => {
-      columnMapping[name] = name; // Используем оригинальные имена
-    });
-
-    // Обрабатываем каждую строку
+    // Обрабатываем каждую строку - просто добавляем новые столбцы в конец
     const processedData = data.map((row) => {
       const newRow = { ...row };
 
@@ -635,38 +594,19 @@ class ExcelProcessor {
       const manufactureDate = this.parseDate(row["Дата изготовления"]);
       const expiryDate = this.parseDate(row["Срок годности"]);
 
-      // Рассчитываем общий срок годности в месяцах
-      const totalMonthsColumnName =
-        columnMapping["Срок годности в месяцах общий"];
-      newRow[totalMonthsColumnName] = this.calculateMonthsDifference(
+      // Добавляем новые столбцы
+      newRow["Срок годности в месяцах общий"] = this.calculateMonthsDifference(
         manufactureDate,
         expiryDate
       );
 
-      // Рассчитываем оставшиеся месяцы
-      const currentDate = new Date();
-      const remainingMonthsColumnName = columnMapping["Осталось месяцев"];
-      newRow[remainingMonthsColumnName] = this.calculateMonthsDifference(
-        currentDate,
+      newRow["Осталось месяцев"] = this.calculateMonthsDifference(
+        new Date(),
         expiryDate
       );
 
       return newRow;
     });
-
-    // Логируем для отладки
-    if (fileAnalysis) {
-      console.log(
-        `Обработка завершена. Добавлены столбцы: "${Object.values(
-          columnMapping
-        ).join('", "')}"`
-      );
-      console.log(
-        `Ожидаемые позиции в Excel: ${fileAnalysis.newColumnsWillBe
-          .map((c) => c.position)
-          .join(", ")}`
-      );
-    }
 
     return processedData;
   }
