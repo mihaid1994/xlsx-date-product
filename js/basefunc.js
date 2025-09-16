@@ -5,12 +5,87 @@ class ExcelProcessor {
     this.newColumns = ["Срок годности в месяцах общий", "Осталось месяцев"];
     this.uploadedFiles = [];
     this.processedFiles = [];
+    this.fileAnalysis = [];
     this.init();
   }
 
   init() {
     this.setupEventListeners();
     this.updateCurrentDate();
+    this.injectAnalysisStyles();
+  }
+
+  injectAnalysisStyles() {
+    const style = document.createElement("style");
+    style.textContent = `
+      .file-analysis {
+        margin-top: 15px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        border-left: 4px solid #007bff;
+      }
+      .analysis-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+        font-size: 14px;
+      }
+      .status-success { color: #28a745; }
+      .status-error { color: #dc3545; }
+      .analysis-details {
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .detail-row {
+        margin-bottom: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      .detail-row span:first-child {
+        color: #666;
+        min-width: 200px;
+      }
+      .new-columns-info {
+        flex-direction: column;
+        align-items: flex-start;
+        background: #e8f4fd;
+        padding: 10px;
+        border-radius: 5px;
+        margin-top: 10px;
+      }
+      .new-columns-list {
+        margin-top: 5px;
+        width: 100%;
+      }
+      .new-column {
+        color: #0066cc;
+        font-size: 12px;
+        margin-bottom: 3px;
+      }
+      .error-row {
+        background: #fff2f2;
+        padding: 8px;
+        border-radius: 4px;
+        border-left: 3px solid #dc3545;
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .missing-columns {
+        color: #dc3545;
+        font-weight: bold;
+        margin-top: 5px;
+      }
+      .error-message {
+        color: #dc3545;
+        font-weight: bold;
+        margin-top: 8px;
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   setupEventListeners() {
@@ -19,8 +94,9 @@ class ExcelProcessor {
     const processBtn = document.getElementById("processBtn");
 
     // Обработка выбора файлов
-    fileInput.addEventListener("change", (e) =>
-      this.handleFiles(e.target.files)
+    fileInput.addEventListener(
+      "change",
+      async (e) => await this.handleFiles(e.target.files)
     );
 
     // Drag & Drop
@@ -34,10 +110,10 @@ class ExcelProcessor {
       uploadArea.classList.remove("dragover");
     });
 
-    uploadArea.addEventListener("drop", (e) => {
+    uploadArea.addEventListener("drop", async (e) => {
       e.preventDefault();
       uploadArea.classList.remove("dragover");
-      this.handleFiles(e.dataTransfer.files);
+      await this.handleFiles(e.dataTransfer.files);
     });
 
     // Обработка файлов
@@ -54,7 +130,7 @@ class ExcelProcessor {
     document.getElementById("currentDate").textContent = dateStr;
   }
 
-  handleFiles(files) {
+  async handleFiles(files) {
     this.uploadedFiles = [];
 
     for (let file of files) {
@@ -66,8 +142,104 @@ class ExcelProcessor {
     }
 
     if (this.uploadedFiles.length > 0) {
+      await this.analyzeFilesBeforeProcessing();
       this.displayUploadedFiles();
     }
+  }
+
+  async analyzeFilesBeforeProcessing() {
+    const analysisResults = [];
+
+    for (let file of this.uploadedFiles) {
+      try {
+        const analysis = await this.analyzeFile(file);
+        analysisResults.push(analysis);
+      } catch (error) {
+        console.error(`Ошибка анализа файла ${file.name}:`, error);
+        analysisResults.push({
+          fileName: file.name,
+          error: error.message,
+        });
+      }
+    }
+
+    this.fileAnalysis = analysisResults;
+  }
+
+  async analyzeFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: "array" });
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+          if (jsonData.length === 0) {
+            reject(new Error("Файл пустой или не содержит данных"));
+            return;
+          }
+
+          const firstRow = jsonData[0];
+          const existingColumns = Object.keys(firstRow);
+
+          // Находим последний заполненный столбец
+          const lastFilledColumnIndex = this.findLastFilledColumn(jsonData);
+          const nextColumnPosition = lastFilledColumnIndex + 1;
+
+          // Проверяем наличие обязательных колонок
+          const missingColumns = this.requiredColumns.filter(
+            (col) => !existingColumns.includes(col)
+          );
+
+          resolve({
+            fileName: file.name,
+            totalColumns: existingColumns.length,
+            existingColumns: existingColumns,
+            lastFilledColumn:
+              existingColumns[lastFilledColumnIndex] || "Не определено",
+            nextColumnPosition: nextColumnPosition,
+            newColumnsWillBe: this.newColumns.map((col, index) => ({
+              name: col,
+              position: nextColumnPosition + index + 1,
+            })),
+            missingRequiredColumns: missingColumns,
+            isValid: missingColumns.length === 0,
+            totalRows: jsonData.length,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      reader.onerror = () => reject(new Error("Ошибка чтения файла"));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  findLastFilledColumn(data) {
+    if (data.length === 0) return -1;
+
+    const allColumns = Object.keys(data[0]);
+    let lastFilledIndex = -1;
+
+    // Проверяем каждый столбец
+    allColumns.forEach((column, index) => {
+      // Проверяем несколько первых строк на наличие данных
+      const hasData = data.slice(0, Math.min(10, data.length)).some((row) => {
+        const value = row[column];
+        return value !== null && value !== undefined && value !== "";
+      });
+
+      if (hasData) {
+        lastFilledIndex = index;
+      }
+    });
+
+    return lastFilledIndex;
   }
 
   isValidExcelFile(file) {
@@ -83,30 +255,180 @@ class ExcelProcessor {
     filesList.innerHTML = "";
 
     this.uploadedFiles.forEach((file, index) => {
+      const analysis = this.fileAnalysis[index];
+
       const fileItem = document.createElement("div");
       fileItem.className = "file-item fade-in";
-      fileItem.innerHTML = `
-                <div class="file-info">
-                    <i class="fas fa-file-excel file-icon"></i>
-                    <div class="file-details">
-                        <div class="file-name">${file.name}</div>
-                        <div class="file-size">${(file.size / 1024).toFixed(
-                          1
-                        )} KB</div>
-                    </div>
+
+      let analysisHtml = "";
+      if (analysis && !analysis.error) {
+        const statusClass = analysis.isValid
+          ? "status-success"
+          : "status-error";
+        const statusIcon = analysis.isValid
+          ? "fa-check-circle"
+          : "fa-exclamation-triangle";
+
+        analysisHtml = `
+          <div class="file-analysis">
+            <div class="analysis-header">
+              <i class="fas ${statusIcon} ${statusClass}"></i>
+              <strong>Анализ файла:</strong>
+            </div>
+            <div class="analysis-details">
+              <div class="detail-row">
+                <span>📊 Строк данных:</span> 
+                <strong>${analysis.totalRows}</strong>
+              </div>
+              <div class="detail-row">
+                <span>📋 Столбцов:</span> 
+                <strong>${analysis.totalColumns}</strong>
+              </div>
+              <div class="detail-row">
+                <span>🎯 Последний заполненный столбец:</span> 
+                <strong>"${analysis.lastFilledColumn}"</strong>
+              </div>
+              <div class="detail-row new-columns-info">
+                <span>➕ Новые столбцы будут добавлены:</span>
+                <div class="new-columns-list">
+                  ${analysis.newColumnsWillBe
+                    .map(
+                      (col) =>
+                        `<div class="new-column">• Столбец ${col.position}: "<strong>${col.name}</strong>"</div>`
+                    )
+                    .join("")}
                 </div>
-            `;
+              </div>
+              ${
+                analysis.missingRequiredColumns.length > 0
+                  ? `
+                <div class="detail-row error-row">
+                  <span>❌ Отсутствуют обязательные колонки:</span>
+                  <div class="missing-columns">${analysis.missingRequiredColumns.join(
+                    ", "
+                  )}</div>
+                </div>
+              `
+                  : ""
+              }
+            </div>
+          </div>
+        `;
+      } else if (analysis && analysis.error) {
+        analysisHtml = `
+          <div class="file-analysis">
+            <div class="analysis-header">
+              <i class="fas fa-exclamation-triangle status-error"></i>
+              <strong>Ошибка анализа:</strong>
+            </div>
+            <div class="error-message">${analysis.error}</div>
+          </div>
+        `;
+      }
+
+      fileItem.innerHTML = `
+        <div class="file-info">
+          <i class="fas fa-file-excel file-icon"></i>
+          <div class="file-details">
+            <div class="file-name">${file.name}</div>
+            <div class="file-size">${(file.size / 1024).toFixed(1)} KB</div>
+          </div>
+        </div>
+        ${analysisHtml}
+      `;
+
       filesList.appendChild(fileItem);
     });
 
     uploadedFilesDiv.style.display = "block";
     uploadedFilesDiv.classList.add("fade-in");
+
+    // Добавляем общую информацию о готовности
+    this.displayProcessingReadiness();
+  }
+
+  displayProcessingReadiness() {
+    let existingReadiness = document.getElementById("processingReadiness");
+    if (existingReadiness) {
+      existingReadiness.remove();
+    }
+
+    const validFiles = this.fileAnalysis.filter(
+      (analysis) => !analysis.error && analysis.isValid
+    ).length;
+
+    const invalidFiles = this.fileAnalysis.length - validFiles;
+
+    const readinessDiv = document.createElement("div");
+    readinessDiv.id = "processingReadiness";
+    readinessDiv.className = "processing-readiness fade-in";
+
+    if (invalidFiles === 0) {
+      readinessDiv.innerHTML = `
+        <div class="readiness-success">
+          <i class="fas fa-check-circle"></i>
+          <strong>Готово к обработке!</strong> Все ${validFiles} файлов прошли проверку.
+        </div>
+      `;
+    } else {
+      readinessDiv.innerHTML = `
+        <div class="readiness-warning">
+          <i class="fas fa-exclamation-triangle"></i>
+          <strong>Внимание:</strong> ${validFiles} файлов готово к обработке, ${invalidFiles} с ошибками.
+          <br><small>Файлы с ошибками не будут обрабатываться.</small>
+        </div>
+      `;
+    }
+
+    // Добавляем стили для этого блока
+    if (!document.getElementById("readiness-styles")) {
+      const style = document.createElement("style");
+      style.id = "readiness-styles";
+      style.textContent = `
+        .processing-readiness {
+          margin: 15px 0;
+          padding: 15px;
+          border-radius: 8px;
+          text-align: center;
+        }
+        .readiness-success {
+          background: #d4edda;
+          color: #155724;
+          border: 1px solid #c3e6cb;
+        }
+        .readiness-warning {
+          background: #fff3cd;
+          color: #856404;
+          border: 1px solid #ffeaa7;
+        }
+        .readiness-success i, .readiness-warning i {
+          margin-right: 8px;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    const uploadedFilesDiv = document.getElementById("uploadedFiles");
+    uploadedFilesDiv.appendChild(readinessDiv);
   }
 
   async processFiles() {
     const processBtn = document.getElementById("processBtn");
     const progressSection = document.getElementById("progressSection");
     const resultsSection = document.getElementById("resultsSection");
+
+    // Проверяем, есть ли файлы с ошибками анализа
+    const invalidFiles = this.fileAnalysis.filter(
+      (analysis) => analysis.error || !analysis.isValid
+    );
+
+    if (invalidFiles.length > 0) {
+      const fileNames = invalidFiles.map((f) => f.fileName).join(", ");
+      alert(
+        `Невозможно обработать файлы с ошибками: ${fileNames}\nПроверьте структуру файлов и повторите попытку.`
+      );
+      return;
+    }
 
     // Подготовка
     processBtn.disabled = true;
